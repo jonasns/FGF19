@@ -15,5 +15,5 @@ module load bowtie2/2.2.9
 #use Bowtie2 to build reference genome
 bowtie2-build \
 	/proj/ref_genomes/GRCh38.p7.genome.fa \
-	/proj/ref_genomes/GRCh38.p7.genome \
+	/proj/ref_genomes/GRCh38.p7.genome
 

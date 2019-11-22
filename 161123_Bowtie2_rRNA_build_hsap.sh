@@ -15,4 +15,4 @@ module load bowtie2/2.2.9
 
 bowtie2-build \
 	/proj/ref_genomes/human_rRNA.fa \
-	/proj/ref_genomes/hsap_rRNA \
+	/proj/ref_genomes/hsap_rRNA

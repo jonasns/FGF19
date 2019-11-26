@@ -1,0 +1,434 @@
+---
+title: "191119 - FGF19 project analysis"
+output: html_notebook
+---
+
+```{r}
+sessionInfo()
+```
+
+####Install packages:
+```{r}
+#install.packages("calibrate")
+#source("https://bioconductor.org/biocLite.R")
+#biocLite("edgeR")
+#biocLite("biomaRt")
+#biocLite("clusterProfiler")
+#biocLite("Rgraphviz")
+#biocLite("DOSE")
+```
+
+####Load packages:
+```{r}
+library(edgeR)
+library(biomaRt)
+library(calibrate)
+library(clusterProfiler)
+library(org.Hs.eg.db)
+library(DOSE)
+```
+
+####Load data:
+```{r}
+counts <- read.delim("~/Desktop/170418_htseq_counts_rvr_Chr1_22", row.names = 1)
+```
+
+####Select single sample (SS) data, i.e. all recombinant and all endogenous samples
+```{r}
+cols_endo=c(1:6)
+endo_SS=counts[,cols_endo]
+
+cols_rec=c(7:15)
+rec_SS=counts[,cols_rec]
+
+```
+
+####Apply cutoff. Use at least 1 count in 3 samples:
+```{r}
+rec_counts_wco=rec_SS[(rowSums(rec_SS>0)>=3),]
+endo_counts_wco=endo_SS[(rowSums(endo_SS>0)>=3),]
+```
+
+#edgeR
+
+####DE analysis with the edgeR package (3 replicates)
+```{r}
+#First we put the data into a DGEList object:
+y_rec=DGEList(rec_counts_wco)
+y_endo=DGEList(endo_counts_wco)
+
+
+#Then we conduct TMM normalization to account for compositional difference between the RNA-seq libraries:
+y_rec=calcNormFactors(y_rec)
+y_endo=calcNormFactors(y_endo)
+
+#The experimental designs are defined:
+patient_rec <- factor(c(16,16,16,224,224,224,226,226,226))
+treatment_rec <- factor(c("Ctrl","FGF19","CDCA","Ctrl","FGF19","CDCA","Ctrl","FGF19","CDCA"))
+design_rec <- model.matrix(~patient_rec+treatment_rec)
+rownames(design_rec) <- colnames(y_rec)
+design_rec
+
+patient_endo <- factor(c(16,16,375,375,39,39))
+treatment_endo <- factor(c("Ctrl","CDCA","Ctrl","CDCA","Ctrl","CDCA"))
+design_endo <- model.matrix(~patient_endo+treatment_endo)
+rownames(design_endo) <- colnames(y_endo)
+design_endo
+
+#Common dispersions are estimated:
+y_rec = estimateGLMCommonDisp(y_rec, design=design_rec, verbose=TRUE)
+y_endo = estimateGLMCommonDisp(y_endo, design=design_endo, verbose=TRUE)
+
+
+#Generalized Linear Models are fitted:
+fit_rec = glmFit(y_rec, design_rec)
+fit_endo = glmFit(y_endo, design_endo)
+
+
+#Likelihood ratio tests are conducted:
+lrt_rec <- glmLRT(fit_rec)
+lrt_endo <- glmLRT(fit_endo)
+CDCAvsFGF19 <- glmLRT(fit_rec,coef=5)
+CDCAvsCtrl <- glmLRT(fit_rec,coef=4)
+CtrlvsFGF19 <- glmLRT(fit_rec,contrast=c(0,0,0,-1,1))
+
+```
+
+####Top DE genes are:
+```{r}
+topTags(lrt_endo)
+print(summary(decideTestsDGE(lrt_endo)))
+```
+```{r}
+topTags(CDCAvsFGF19)
+print(summary(decideTestsDGE(CDCAvsFGF19)))
+```
+
+```{r}
+topTags(CDCAvsCtrl)
+print(summary(decideTestsDGE(CDCAvsCtrl)))
+```
+
+```{r}
+topTags(CtrlvsFGF19)
+print(summary(decideTestsDGE(CtrlvsFGF19)))
+
+```
+
+####Add official gene symbols to lists and write the results of the DE analysis to a table:
+```{r}
+results_endo <- topTags(lrt_endo,n = length(y_endo$counts[,1]))
+results_CDCAvsFGF19 <- topTags(CDCAvsFGF19,n = length(y_rec$counts[,1]))
+results_CDCAvsCtrl <- topTags(CDCAvsCtrl,n = length(y_rec$counts[,1]))
+results_CtrlvsFGF19 <- topTags(CtrlvsFGF19,n = length(y_rec$counts[,1]))
+
+mart <- useMart(biomart="ensembl", dataset = "hsapiens_gene_ensembl",host="www.ensembl.org")
+ensembl2name <- getBM(attributes=c("ensembl_gene_id","external_gene_name"),mart=mart)
+
+results_endo <- merge(x=results_endo$table, y=ensembl2name, by.x=0, by.y=1, all.x=TRUE)
+results_CDCAvsFGF19 <- merge(x=results_CDCAvsFGF19$table, y=ensembl2name, by.x=0, by.y=1, all.x=TRUE)
+results_CDCAvsCtrl <- merge(x=results_CDCAvsCtrl$table, y=ensembl2name, by.x=0, by.y=1, all.x=TRUE)
+results_CtrlvsFGF19 <- merge(x=results_CtrlvsFGF19$table, y=ensembl2name, by.x=0, by.y=1, all.x=TRUE)
+```
+```{r}
+write.table(as.matrix(results_endo),file="~/Desktop/191120_endo_DEG",sep="\t")
+write.table(as.matrix(results_CDCAvsFGF19),file="~/Desktop/191120_CDCAvsFGF19_DEG",sep="\t")
+write.table(as.matrix(results_CDCAvsCtrl),file="~/Desktop/191120_CDCAvsCtrl_DEG",sep="\t")
+write.table(as.matrix(results_CtrlvsFGF19),file="~/Desktop/191120_CtrlvsFGF19_DEG",sep="\t")
+```
+
+####Write the fitted (TMM) values to a table:
+```{r}
+fit_endo_name <- merge(x=fit_endo$fitted.values, y=ensembl2name, by.x=0, by.y=1, all.x=TRUE)
+write.table(as.matrix(fit_endo_name),file="~/Desktop/191120_endo_TMM",sep="\t")
+
+fit_rec_name <- merge(x=fit_rec$fitted.values, y=ensembl2name, by.x=0, by.y=1, all.x=TRUE)
+write.table(as.matrix(fit_rec_name),file="~/Desktop/191120_rec_TMM",sep="\t")
+```
+
+```{r}
+#Next we library-size normalize the TMM values:
+TMM_endo=colSums(fit_endo$fitted.values)
+TMM_endo_LibrNorm = sweep(fit_endo$fitted.values, 2, TMM_endo, `/`)*10^6
+colSums(TMM_endo_LibrNorm)
+
+TMM_rec=colSums(fit_rec$fitted.values)
+TMM_rec_LibrNorm = sweep(fit_rec$fitted.values, 2, TMM_rec, `/`)*10^6
+colSums(TMM_rec_LibrNorm)
+```
+
+```{r}
+##PCA on normalized values for rec FGF19 treatment
+par(pty="s") 
+PCA_norm_rec <- prcomp(t(log2(TMM_rec_LibrNorm+1)))
+Matrix_norm_rec <- summary(PCA_norm_rec)
+col.def<-c("black","red","blue", "black","red","blue", "black","red","blue")
+colors <- col.def
+
+plot(PCA_norm_rec$x[,1],PCA_norm_rec$x[,2],col=colors,pch=20,xlab=paste0("PC1 (", round(Matrix_norm_rec$importance[2,1]*100), "%)"),ylab=paste0("PC2 (", round(Matrix_norm_rec$importance[2,2]*100),"%)"),cex=3)
+text(PCA_norm_rec$x[,1],PCA_norm_rec$x[,2],labels=colnames(TMM_rec_LibrNorm), pos=list(1), cex=1)
+
+plot(PCA_norm_rec$x[,3],PCA_norm_rec$x[,4],col=colors,pch=20,xlab=paste0("PC3 (", round(Matrix_norm_rec$importance[2,3]*100), "%)"),ylab=paste0("PC4 (", round(Matrix_norm_rec$importance[2,4]*100),"%)"),cex=3)
+text(PCA_norm_rec$x[,3],PCA_norm_rec$x[,4],labels=colnames(TMM_rec_LibrNorm),pos=list(1), cex=1)
+
+plot(PCA_norm_rec$x[,5],PCA_norm_rec$x[,6],col=colors,pch=20,xlab=paste0("PC5 (", round(Matrix_norm_rec$importance[2,5]*100), "%)"),ylab=paste0("PC6 (", round(Matrix_norm_rec$importance[2,6]*100),"%)"),cex=3)
+text(PCA_norm_rec$x[,5],PCA_norm_rec$x[,6],labels=colnames(TMM_rec_LibrNorm),pos=list(1), cex=1)
+```
+
+```{r}
+##PCA on normalized values for endo FGF19 treatment
+par(pty="s") 
+PCA_norm_endo <- prcomp(t(log2(TMM_endo_LibrNorm+1)))
+Matrix_norm_endo <- summary(PCA_norm_endo)
+col.def<-c("darkgreen","gold", "darkgreen","gold", "darkgreen","gold")
+colors <- col.def
+
+plot(PCA_norm_endo$x[,1],PCA_norm_endo$x[,2],col=colors,pch=20,xlab=paste0("PC1 (", round(Matrix_norm_endo$importance[2,1]*100), "%)"),ylab=paste0("PC2 (", round(Matrix_norm_endo$importance[2,2]*100),"%)"),cex=3)
+text(PCA_norm_endo$x[,1],PCA_norm_endo$x[,2],labels=colnames(TMM_endo_LibrNorm), pos=2, cex=1)
+
+plot(PCA_norm_endo$x[,3],PCA_norm_endo$x[,4],col=colors,pch=20,xlab=paste0("PC3 (", round(Matrix_norm_endo$importance[2,3]*100), "%)"),ylab=paste0("PC4 (", round(Matrix_norm_endo$importance[2,4]*100),"%)"),cex=3)
+text(PCA_norm_endo$x[,3],PCA_norm_endo$x[,4],labels=colnames(TMM_endo_LibrNorm),pos=list(1), cex=1)
+
+plot(PCA_norm_endo$x[,5],PCA_norm_endo$x[,6],col=colors,pch=20,xlab=paste0("PC5 (", round(Matrix_norm_endo$importance[2,5]*100), "%)"),ylab=paste0("PC6 (", round(Matrix_norm_endo$importance[2,6]*100),"%)"),cex=3)
+text(PCA_norm_endo$x[,5],PCA_norm_endo$x[,6],labels=colnames(TMM_endo_LibrNorm),pos=list(1), cex=1)
+```
+
+
+#Gene Ontology and KEGG Pathway Analysis
+####Load the data for GO analysis:
+```{r}
+#Note: It's better to use ENSEMBL or ENTREZ IDs for the GO analysis. The clusterProfiler package only accepts ENTREZ IDs for KEGG pathway analysis.
+CDCA_unique =  read.delim("~/Desktop/191120_CDCA_rec_unique.txt", header=F)
+FGF19_unique =  read.delim("~/Desktop/191120_FGF19_rec_unique.txt", header=F)
+ENDO = read.delim("~/Desktop/191120_FGF19_endo.txt", header=F)
+```
+
+#### Biological Process GO analysis
+```{r}
+CDCA_BP <- enrichGO(gene = CDCA_unique$V1,
+                keyType       = 'ENSEMBL',
+                OrgDb         = org.Hs.eg.db,
+                ont           = "BP",
+                pAdjustMethod = "BH",
+                pvalueCutoff  = 0.05,
+                qvalueCutoff  = 0.05,
+                minGSSize     = 3,
+                readable      = TRUE)
+head(summary(CDCA_BP))
+
+FGF19_BP <- enrichGO(gene = FGF19_unique$V1,
+                keyType       = 'ENSEMBL',
+                OrgDb         = org.Hs.eg.db,
+                ont           = "BP",
+                pAdjustMethod = "BH",
+                pvalueCutoff  = 0.10,
+                qvalueCutoff  = 0.10,
+                minGSSize     = 3,
+                readable      = TRUE)
+head(summary(FGF19_BP))
+
+ENDO_BP <- enrichGO(gene = ENDO$V1,
+                keyType       = 'ENSEMBL',
+                OrgDb         = org.Hs.eg.db,
+                ont           = "BP",
+                pAdjustMethod = "BH",
+                pvalueCutoff  = 0.10,
+                qvalueCutoff  = 0.10,
+                minGSSize     = 3,
+                readable      = TRUE)
+head(summary(ENDO_BP))
+```
+
+```{r}
+#Plot top 15 BPs as dotplots
+dotplot(CDCA_BP, showCategory=15)
+dotplot(FGF19_BP, showCategory=15)
+dotplot(ENDO_BP, showCategory=15)
+```
+
+```{r}
+#Plot top 10 BPs as a cnetplot (GO terms are in brown bubbles, and gene names are in grey bubbles)
+cnetplot(CDCA_BP, 10)
+#cnetplot(FGF19_BP, 10)
+#cnetplot(ENDO_BP, 10)
+```
+
+```{r}
+#write the analysis results to file:
+write.table(as.matrix(summary(CDCA_BP)),file="~/Desktop/191121_Summary_CDCArec_unique_BP.txt",sep="\t")
+write.table(as.matrix(summary(FGF19_BP)),file="~/Desktop/191121_Summary_FGF19rec_unique_BP.txt",sep="\t")
+write.table(as.matrix(summary(ENDO_BP)),file="~/Desktop/191121_Summary_FGF19endo_BP.txt",sep="\t")
+```
+
+#### Molecular Functions GO analysis
+```{r}
+CDCA_MF <- enrichGO(gene = CDCA_unique$V1,
+                keyType       = 'ENSEMBL',
+                OrgDb         = org.Hs.eg.db,
+                ont           = "MF",
+                pAdjustMethod = "BH",
+                pvalueCutoff  = 0.05,
+                qvalueCutoff  = 0.05,
+                minGSSize     = 3,
+                readable      = TRUE)
+head(summary(CDCA_MF))
+
+FGF19_MF <- enrichGO(gene = FGF19_unique$V1,
+                keyType       = 'ENSEMBL',
+                OrgDb         = org.Hs.eg.db,
+                ont           = "MF",
+                pAdjustMethod = "BH",
+                pvalueCutoff  = 0.10,
+                qvalueCutoff  = 0.10,
+                minGSSize     = 3,
+                readable      = TRUE)
+head(summary(FGF19_MF))
+
+ENDO_MF <- enrichGO(gene = ENDO$V1,
+                keyType       = 'ENSEMBL',
+                OrgDb         = org.Hs.eg.db,
+                ont           = "MF",
+                pAdjustMethod = "BH",
+                pvalueCutoff  = 0.10,
+                qvalueCutoff  = 0.10,
+                minGSSize     = 3,
+                readable      = TRUE)
+head(summary(ENDO_MF))
+```
+
+```{r}
+#Plot top 15 MFs as dotplots
+dotplot(CDCA_MF, showCategory=15)
+dotplot(FGF19_MF, showCategory=15)
+dotplot(ENDO_MF, showCategory=15)
+```
+
+```{r}
+#Plot top 10 MFs as a cnetplot (GO terms are in brown bubbles, and gene names are in grey bubbles)
+cnetplot(CDCA_MF, 10)
+#cnetplot(FGF19_MF, 10)
+#cnetplot(ENDO_MF, 10)
+```
+
+```{r}
+#write the analysis results to file:
+write.table(as.matrix(summary(CDCA_MF)),file="~/Desktop/191121_Summary_CDCArec_unique_MF.txt",sep="\t")
+write.table(as.matrix(summary(FGF19_MF)),file="~/Desktop/191121_Summary_FGF19rec_unique_MF.txt",sep="\t")
+write.table(as.matrix(summary(ENDO_MF)),file="~/Desktop/191121_Summary_FGF19endo_MF.txt",sep="\t")
+```
+
+#### Cellular component GO analysis
+
+```{r}
+CDCA_CC <- enrichGO(gene = CDCA_unique$V1,
+                keyType       = 'ENSEMBL',
+                OrgDb         = org.Hs.eg.db,
+                ont           = "CC",
+                pAdjustMethod = "BH",
+                pvalueCutoff  = 0.10,
+                qvalueCutoff  = 0.10,
+                minGSSize     = 3,
+                readable      = TRUE)
+head(summary(CDCA_CC))
+
+FGF19_CC <- enrichGO(gene = FGF19_unique$V1,
+                keyType       = 'ENSEMBL',
+                OrgDb         = org.Hs.eg.db,
+                ont           = "CC",
+                pAdjustMethod = "BH",
+                pvalueCutoff  = 0.10,
+                qvalueCutoff  = 0.10,
+                minGSSize     = 3,
+                readable      = TRUE)
+head(summary(FGF19_CC))
+
+ENDO_CC <- enrichGO(gene = ENDO$V1,
+                keyType       = 'ENSEMBL',
+                OrgDb         = org.Hs.eg.db,
+                ont           = "CC",
+                pAdjustMethod = "BH",
+                pvalueCutoff  = 0.10,
+                qvalueCutoff  = 0.10,
+                minGSSize     = 3,
+                readable      = TRUE)
+head(summary(ENDO_CC))
+```
+
+```{r}
+#Plot top 15 CCs as dotplots
+dotplot(CDCA_CC, showCategory=15)
+dotplot(FGF19_CC, showCategory=15)
+dotplot(ENDO_CC, showCategory=15)
+```
+
+```{r}
+#Plot top 10 CCs as a cnetplot (GO terms are in brown bubbles, and gene names are in grey bubbles)
+#cnetplot(CDCA_CC, 10)
+#cnetplot(FGF19_CC, 10)
+#cnetplot(ENDO_CC, 10)
+```
+
+```{r}
+#write the analysis results to file:
+write.table(as.matrix(summary(CDCA_CC)),file="~/Desktop/191121_Summary_CDCArec_unique_CC.txt",sep="\t")
+write.table(as.matrix(summary(FGF19_CC)),file="~/Desktop/191121_Summary_FGF19rec_unique_CC.txt",sep="\t")
+write.table(as.matrix(summary(ENDO_CC)),file="~/Desktop/191121_Summary_FGF19endo_CC.txt",sep="\t")
+```
+
+#### KEGG analysis
+```{r}
+#First change the gene IDs from ENSEMBL to ENTREZ:
+CDCA.entrez <- bitr(CDCA_unique$V1, fromType = "ENSEMBL",
+        toType = c("ENTREZID"),
+        OrgDb = org.Hs.eg.db)
+
+FGF19.entrez <- bitr(FGF19_unique$V1, fromType = "ENSEMBL",
+        toType = c("ENTREZID"),
+        OrgDb = org.Hs.eg.db)
+
+ENDO.entrez <- bitr(ENDO$V1, fromType = "ENSEMBL",
+        toType = c("ENTREZID"),
+        OrgDb = org.Hs.eg.db)
+```
+
+```{r}
+#Then perform the KEGG analysis
+
+#significance cutoff has been loosened due to nothing significant at p/q = 0.05:
+CDCA_kegg <- enrichKEGG(gene = CDCA.entrez$ENTREZID,
+                 organism     = 'hsa',
+                 pvalueCutoff = 0.05)
+head(CDCA_kegg)
+
+FGF19_kegg <- enrichKEGG(gene = FGF19.entrez$ENTREZID,
+                 organism     = 'hsa',
+                 pvalueCutoff = 0.10)
+head(FGF19_kegg)
+
+ENDO_kegg <- enrichKEGG(gene = ENDO.entrez$ENTREZID,
+                 organism     = 'hsa',
+                 pvalueCutoff = 0.10)
+head(ENDO_kegg)
+```
+
+```{r}
+#Plot top 15 CCs as dotplots
+dotplot(CDCA_kegg, showCategory=15)
+dotplot(FGF19_kegg, showCategory=15)
+dotplot(ENDO_kegg, showCategory=15)
+```
+
+```{r}
+#Plot top 10 KEGGs as a cnetplot (GO terms are in brown bubbles, and gene names are in grey bubbles)
+#gene names are ENTREZ IDs here.
+cnetplot(CDCA_kegg, 10)
+#cnetplot(FGF19_kegg, 10)
+#cnetplot(ENDO_kegg, 10)
+```
+
+```{r}
+#write the analysis results to file:
+write.table(as.matrix(summary(CDCA_kegg)),file="~/Desktop/191121_Summary_CDCArec_unique_KEGG.txt",sep="\t")
+write.table(as.matrix(summary(FGF19_kegg)),file="~/Desktop/191121_Summary_FGF19rec_unique_KEGG.txt",sep="\t")
+write.table(as.matrix(summary(ENDO_kegg)),file="~/Desktop/191121_Summary_FGF19endo_KEGG.txt",sep="\t")
+```
